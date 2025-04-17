@@ -15,7 +15,7 @@ export async function getCertificate(db: D1Database, userId: string, certificate
   try {
     const stmt = db.prepare(`
       SELECT * FROM certificates
-      WHERE id = ?1 AND user_id = ?2
+      WHERE id = ? AND user_id = ?
       LIMIT 1
     `);
     
@@ -35,7 +35,7 @@ export async function getUser(db: D1Database, userId: string): Promise<User | nu
   try {
     const stmt = db.prepare(`
       SELECT * FROM users
-      WHERE id = ?1
+      WHERE id = ?
       LIMIT 1
     `);
     
@@ -63,10 +63,10 @@ export async function updateCertificateVerification(
     
     const stmt = db.prepare(`
       UPDATE certificates
-      SET verification_status = ?1,
-          verification_details = ?2,
-          updated_at = ?3
-      WHERE id = ?4
+      SET verification_status = ?,
+          verification_details = ?,
+          updated_at = ?
+      WHERE id = ?
     `);
     
     stmt.bind(status, verificationDetails, now, certificateId);
@@ -98,7 +98,7 @@ export async function createVerificationLog(
     
     const stmt = db.prepare(`
       INSERT INTO verification_logs (id, certificate_id, verification_step, status, details, created_at)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+      VALUES (?, ?, ?, ?, ?, ?)
       RETURNING *
     `);
     
@@ -128,9 +128,9 @@ export async function getVerificationLogs(
   try {
     const stmt = db.prepare(`
       SELECT * FROM verification_logs
-      WHERE certificate_id = ?1
+      WHERE certificate_id = ?
       ORDER BY created_at DESC
-      LIMIT ?2 OFFSET ?3
+      LIMIT ? OFFSET ?
     `);
     
     stmt.bind(certificateId, limit, offset);
