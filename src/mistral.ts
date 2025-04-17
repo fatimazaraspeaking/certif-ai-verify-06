@@ -79,11 +79,9 @@ Output a document_b_confidence_score between 0 and 1 based on the credibility an
 
 ### 🌐 URL Authenticity Check
 
-Examine the ${getVerificationUrlFromPdfUrl(verificationUrlPdf)} domain and verify:
+Examine the ${getVerificationUrlFromPdfUrl(verificationUrlPdf)} :
 
-- Does the domain match or closely resemble the institution in Document A?
-- Is the domain contextually aligned with the branding seen in Document B?
-- Does the URL appear official or of any well known or recognised domain url?
+- Does the degree_or_program name real or just random ?
 
 Return:
 - "verification_url_valid": true | false
