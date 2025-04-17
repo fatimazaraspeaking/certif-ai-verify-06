@@ -13,14 +13,21 @@ import { D1Database } from '@cloudflare/workers-types';
  */
 export async function getCertificate(db: D1Database, userId: string, certificateId: string): Promise<Certificate | null> {
   try {
-    const stmt = db.prepare(`
+    // Simplified query without parameter position markers
+    const query = `
       SELECT * FROM certificates
       WHERE id = ? AND user_id = ?
       LIMIT 1
-    `);
+    `;
     
-    stmt.bind(certificateId, userId);
-    const certificate = await stmt.first<Certificate>();
+    // Create the prepared statement with the query
+    const stmt = db.prepare(query);
+    
+    // Bind the parameters in order
+    const boundStmt = stmt.bind(certificateId, userId);
+    
+    // Execute the query and get the first result
+    const certificate = await boundStmt.first<Certificate>();
     return certificate || null;
   } catch (error) {
     console.error('Error fetching certificate:', error);
@@ -33,17 +40,22 @@ export async function getCertificate(db: D1Database, userId: string, certificate
  */
 export async function getUser(db: D1Database, userId: string): Promise<User | null> {
   try {
-    const stmt = db.prepare(`
+    // Simplified query
+    const query = `
       SELECT * FROM users
       WHERE id = ?
       LIMIT 1
-    `);
+    `;
     
-    stmt.bind(userId);
-    const user = await stmt.first<User>();
+    // More explicit binding to ensure correct parameter association
+    const user = await db.prepare(query).bind(userId).first<User>();
+    
+    // Add debugging logs
+    console.log(`User query executed for ID: ${userId}`, user ? 'User found' : 'User not found');
+    
     return user || null;
   } catch (error) {
-    console.error('Error fetching user:', error);
+    console.error(`Error fetching user with ID ${userId}:`, error);
     throw new Error(`Database error: Failed to fetch user: ${error.message}`);
   }
 }
@@ -61,16 +73,19 @@ export async function updateCertificateVerification(
     const now = new Date().toISOString();
     const verificationDetails = details ? JSON.stringify(details) : null;
     
-    const stmt = db.prepare(`
+    // Simplified query
+    const query = `
       UPDATE certificates
       SET verification_status = ?,
           verification_details = ?,
           updated_at = ?
       WHERE id = ?
-    `);
+    `;
     
-    stmt.bind(status, verificationDetails, now, certificateId);
-    const result = await stmt.run();
+    // Execute the update with explicit parameters
+    const result = await db.prepare(query)
+      .bind(status, verificationDetails, now, certificateId)
+      .run();
     
     if (!result.success) {
       throw new Error(`Failed to update certificate: ${result.error || 'Unknown error'}`);
@@ -96,14 +111,17 @@ export async function createVerificationLog(
     const now = new Date().toISOString();
     const detailsJson = details ? JSON.stringify(details) : null;
     
-    const stmt = db.prepare(`
+    // Simplified query
+    const query = `
       INSERT INTO verification_logs (id, certificate_id, verification_step, status, details, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
       RETURNING *
-    `);
+    `;
     
-    stmt.bind(id, certificateId, step, status, detailsJson, now);
-    const log = await stmt.first<VerificationLog>();
+    // Execute with explicit parameters
+    const log = await db.prepare(query)
+      .bind(id, certificateId, step, status, detailsJson, now)
+      .first<VerificationLog>();
     
     if (!log) {
       throw new Error('Failed to create verification log');
@@ -126,15 +144,19 @@ export async function getVerificationLogs(
   offset: number = 0
 ): Promise<VerificationLog[]> {
   try {
-    const stmt = db.prepare(`
+    // Simplified query
+    const query = `
       SELECT * FROM verification_logs
       WHERE certificate_id = ?
       ORDER BY created_at DESC
       LIMIT ? OFFSET ?
-    `);
+    `;
     
-    stmt.bind(certificateId, limit, offset);
-    const { results } = await stmt.all<VerificationLog>();
+    // Execute with explicit parameters
+    const { results } = await db.prepare(query)
+      .bind(certificateId, limit, offset)
+      .all<VerificationLog>();
+    
     return results;
   } catch (error) {
     console.error('Error fetching verification logs:', error);
