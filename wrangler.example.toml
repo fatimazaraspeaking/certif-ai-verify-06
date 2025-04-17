@@ -1,0 +1,33 @@
+
+name = "certificate-verification-worker"
+main = "src/index.ts"
+compatibility_date = "2023-12-01"
+compatibility_flags = ["nodejs_compat", "experimental"]
+workers_dev = true
+
+# KV for storing logs
+[[kv_namespaces]]
+binding = "VERIFICATION_LOGS"
+id = "your-kv-namespace-id-for-logs"
+preview_id = "your-preview-kv-namespace-id-for-logs"
+
+# KV for caching
+[[kv_namespaces]]
+binding = "CACHE"
+id = "your-kv-namespace-id-for-cache"
+preview_id = "your-preview-kv-namespace-id-for-cache"
+
+# D1 Database for certificates and users
+[[d1_databases]]
+binding = "DB"
+database_name = "certificate_verification"
+database_id = "your-d1-database-id"
+
+# Sensitive environment variables
+[vars]
+MISTRAL_API_KEY = ""
+JWT_SECRET = ""
+
+# D1 Migrations
+[migrations]
+directory = "./migrations"
