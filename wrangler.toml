@@ -26,7 +26,26 @@ database_id = "your-d1-database-id"
 # Sensitive environment variables
 [vars]
 MISTRAL_API_KEY = ""
+JWT_SECRET = ""
 
 # D1 Migrations
 [migrations]
 directory = "./migrations"
+
+# Routes (for production)
+[routes]
+pattern = "certificates.yourdomain.com/*"
+zone_name = "yourdomain.com"
+
+# Environment-specific configurations
+[env.production]
+route = "certificates.yourdomain.com/*"
+workers_dev = false
+
+# Security headers
+[env.production.build.upload]
+format = "service-worker"
+
+# Rate limiting
+[limits]
+requests_per_minute = 100

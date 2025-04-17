@@ -1,0 +1,67 @@
+
+name: Deploy Certificate Verification Worker
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Run tests
+        run: npm test
+  
+  deploy:
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Deploy to Cloudflare Workers
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        run: |
+          npx wrangler deploy --env production
+        
+      - name: Verify deployment
+        run: |
+          echo "Waiting for deployment to propagate..."
+          sleep 10
+          WORKER_URL=$(npx wrangler whoami | grep -o 'certificates\..*\.workers\.dev' || echo "certificate-verification-worker.workers.dev")
+          HEALTH_CHECK=$(curl -s "https://$WORKER_URL/health" || echo '{"status":"error"}')
+          
+          if echo "$HEALTH_CHECK" | grep -q '"status":"ok"'; then
+            echo "✅ Deployment successful! Worker is healthy."
+          else
+            echo "⚠️ Worker deployed but health check failed. Please check logs."
+            echo "Response: $HEALTH_CHECK"
+            exit 1
+          fi

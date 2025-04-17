@@ -76,7 +76,7 @@ export interface Env {
   VERIFICATION_LOGS: KVNamespace;
   CACHE: KVNamespace;
   MISTRAL_API_KEY: string;
-  JWT_SECRET?: string;
+  JWT_SECRET: string; // Added JWT secret
 }
 
 // API response formats
@@ -86,6 +86,7 @@ export interface VerificationResponse {
   message: string;
   details?: MistralVerificationResponse;
   timestamp: string;
+  requestId?: string; // Added for better tracing
 }
 
 export interface ErrorResponse {
@@ -110,4 +111,19 @@ export interface LogsResponse {
     cursor: string;
     hasMore: boolean;
   };
+}
+
+// Rate limiting types
+export interface RateLimitInfo {
+  allowed: boolean;
+  remaining: number;
+  resetAt: number;
+  retryAfter?: number;
+}
+
+// Authentication types
+export interface AuthResult {
+  valid: boolean;
+  userId?: string;
+  error?: string;
 }

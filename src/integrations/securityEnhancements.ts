@@ -1,9 +1,11 @@
 
 import { Env } from '../types';
 import { nanoid } from 'nanoid';
+import { createHmac, timingSafeEqual } from 'crypto';
 
 /**
  * Security enhancements for the certificate verification worker
+ * Production-ready implementation with proper JWT authentication and rate limiting
  */
 
 // Rate limiting implementation using Cloudflare KV
@@ -11,12 +13,13 @@ export async function checkRateLimit(
   env: Env,
   ip: string,
   endpoint: string,
-  limit: number = 10, // Default: 10 requests per minute
+  limit: number = 50, // Default: 50 requests per minute (increased for production)
   windowSizeInSeconds: number = 60
 ): Promise<{
   allowed: boolean;
   remaining: number;
   resetAt: number;
+  retryAfter?: number;
 }> {
   const now = Math.floor(Date.now() / 1000);
   const windowKey = Math.floor(now / windowSizeInSeconds);
@@ -29,19 +32,28 @@ export async function checkRateLimit(
     
     if (currentCount >= limit) {
       // Rate limit exceeded
+      const resetTime = (windowKey + 1) * windowSizeInSeconds;
+      const retryAfter = resetTime - now;
+      
       return {
         allowed: false,
         remaining: 0,
-        resetAt: (windowKey + 1) * windowSizeInSeconds
+        resetAt: resetTime,
+        retryAfter
       };
     }
     
-    // Increment the counter
-    await env.CACHE.put(
-      rateLimitKey, 
-      (currentCount + 1).toString(), 
-      { expirationTtl: windowSizeInSeconds }
-    );
+    // Increment the counter with proper error handling
+    try {
+      await env.CACHE.put(
+        rateLimitKey, 
+        (currentCount + 1).toString(), 
+        { expirationTtl: windowSizeInSeconds + 5 } // Add buffer to ensure proper expiration
+      );
+    } catch (error) {
+      console.error('Failed to update rate limit counter:', error);
+      // Allow the request to proceed if we can't update the counter
+    }
     
     return {
       allowed: true,
@@ -59,13 +71,19 @@ export async function checkRateLimit(
   }
 }
 
-// Generate a signed JWT token for authentication
+// Generate a proper JWT token for authentication
 export function generateAuthToken(userId: string, secretKey: string): string {
-  // This is a simplified implementation
-  // In production, use a proper JWT library
+  if (!secretKey) {
+    throw new Error('JWT_SECRET environment variable is not configured');
+  }
   
   const now = Math.floor(Date.now() / 1000);
   const expiresAt = now + 60 * 60; // 1 hour expiration
+  
+  const header = {
+    alg: 'HS256',
+    typ: 'JWT'
+  };
   
   const payload = {
     sub: userId,
@@ -74,10 +92,15 @@ export function generateAuthToken(userId: string, secretKey: string): string {
     jti: nanoid(16)
   };
   
-  // In a real implementation, this would use proper JWT signing
-  // For demo purposes, we'll create a simplified token
-  const token = Buffer.from(JSON.stringify(payload)).toString('base64');
-  return `${token}.${generateSimpleHmac(token, secretKey)}`;
+  const headerBase64 = Buffer.from(JSON.stringify(header)).toString('base64url');
+  const payloadBase64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  
+  const signatureInput = `${headerBase64}.${payloadBase64}`;
+  const signature = createHmac('sha256', secretKey)
+    .update(signatureInput)
+    .digest('base64url');
+  
+  return `${signatureInput}.${signature}`;
 }
 
 // Verify a JWT token
@@ -86,12 +109,35 @@ export function verifyAuthToken(token: string, secretKey: string): {
   userId?: string;
   error?: string;
 } {
+  if (!secretKey) {
+    return {
+      valid: false,
+      error: 'JWT_SECRET environment variable is not configured'
+    };
+  }
+  
   try {
-    const [payloadBase64, signature] = token.split('.');
+    const [headerBase64, payloadBase64, signature] = token.split('.');
     
-    // Verify signature (simplified)
-    const expectedSignature = generateSimpleHmac(payloadBase64, secretKey);
-    if (signature !== expectedSignature) {
+    if (!headerBase64 || !payloadBase64 || !signature) {
+      return {
+        valid: false,
+        error: 'Invalid token format'
+      };
+    }
+    
+    // Verify signature
+    const signatureInput = `${headerBase64}.${payloadBase64}`;
+    const expectedSignature = createHmac('sha256', secretKey)
+      .update(signatureInput)
+      .digest('base64url');
+    
+    // Use timing-safe comparison to prevent timing attacks
+    const signatureBuffer = Buffer.from(signature);
+    const expectedBuffer = Buffer.from(expectedSignature);
+    
+    if (signatureBuffer.length !== expectedBuffer.length || 
+        !timingSafeEqual(signatureBuffer, expectedBuffer)) {
       return {
         valid: false,
         error: 'Invalid signature'
@@ -99,7 +145,15 @@ export function verifyAuthToken(token: string, secretKey: string): {
     }
     
     // Decode payload
-    const payload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString());
+    let payload;
+    try {
+      payload = JSON.parse(Buffer.from(payloadBase64, 'base64url').toString());
+    } catch (e) {
+      return {
+        valid: false,
+        error: 'Invalid payload'
+      };
+    }
     
     // Check expiration
     const now = Math.floor(Date.now() / 1000);
@@ -120,20 +174,4 @@ export function verifyAuthToken(token: string, secretKey: string): {
       error: `Token validation error: ${error.message}`
     };
   }
-}
-
-// Simple HMAC implementation (for demo only)
-// In production, use a proper crypto library
-function generateSimpleHmac(data: string, key: string): string {
-  // This is NOT a secure implementation and is for demo purposes only
-  let hash = 0;
-  const combined = data + key;
-  
-  for (let i = 0; i < combined.length; i++) {
-    const char = combined.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  
-  return Math.abs(hash).toString(16);
 }

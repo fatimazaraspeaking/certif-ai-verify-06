@@ -1,175 +1,130 @@
 
-import { Env } from './types';
+import { Env, ErrorResponse } from './types';
 import { checkRateLimit, verifyAuthToken } from './integrations/securityEnhancements';
+import { nanoid } from 'nanoid';
 
 /**
- * Middleware functions for the worker
+ * Middleware functions for request processing
  */
 
-/**
- * Rate limiting middleware
- */
-export async function rateLimitMiddleware(
+// CORS middleware
+export function corsHeaders(origin: string = '*'): Record<string, string> {
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, X-Request-ID',
+    'Access-Control-Max-Age': '86400',
+  };
+}
+
+// Rate limiting middleware
+export async function handleRateLimit(
   request: Request,
   env: Env,
   endpoint: string,
-  limit: number = 10,
-  windowSizeInSeconds: number = 60
+  limit?: number
 ): Promise<Response | null> {
-  // Get client IP (in Cloudflare, this would use request.headers.get('CF-Connecting-IP'))
-  const ip = request.headers.get('CF-Connecting-IP') || 
-             request.headers.get('X-Forwarded-For') || 
-             '127.0.0.1';
+  const clientIP = request.headers.get('CF-Connecting-IP') || 
+                   request.headers.get('X-Forwarded-For') || 
+                   'unknown';
   
-  // Check rate limit
-  const rateLimitResult = await checkRateLimit(env, ip, endpoint, limit, windowSizeInSeconds);
+  const rateLimitResult = await checkRateLimit(env, clientIP, endpoint, limit);
   
   if (!rateLimitResult.allowed) {
-    return new Response(JSON.stringify({
+    const headers = {
+      ...corsHeaders(),
+      'Retry-After': `${rateLimitResult.retryAfter || 60}`,
+      'X-RateLimit-Limit': `${limit || 50}`,
+      'X-RateLimit-Remaining': '0',
+      'X-RateLimit-Reset': `${rateLimitResult.resetAt}`
+    };
+    
+    const errorResponse: ErrorResponse = {
       success: false,
       error: 'Rate limit exceeded',
       code: 429,
-      resetAt: rateLimitResult.resetAt,
       timestamp: new Date().toISOString()
-    }), {
+    };
+    
+    return new Response(JSON.stringify(errorResponse), {
       status: 429,
       headers: {
         'Content-Type': 'application/json',
-        'X-RateLimit-Limit': limit.toString(),
-        'X-RateLimit-Remaining': '0',
-        'X-RateLimit-Reset': rateLimitResult.resetAt.toString(),
-        'Retry-After': (rateLimitResult.resetAt - Math.floor(Date.now() / 1000)).toString()
+        ...headers
       }
     });
   }
   
-  // If rate limit is not exceeded, add rate limit headers and continue
   return null;
 }
 
-/**
- * Authentication middleware
- */
-export function authenticationMiddleware(
+// Authorization middleware
+export function checkAuth(
   request: Request,
-  env: Env,
-  requireAuth: boolean = true
-): { userId: string | null; isAuthenticated: boolean; errorResponse: Response | null } {
-  // Get authentication token from headers
+  env: Env
+): { authorized: boolean; userId?: string; error?: string } {
+  // Skip auth for certain endpoints
+  const url = new URL(request.url);
+  if (url.pathname === '/health' || request.method === 'OPTIONS') {
+    return { authorized: true };
+  }
+  
   const authHeader = request.headers.get('Authorization');
-  
-  if (!authHeader && requireAuth) {
-    // If authentication is required but no token is provided
-    return {
-      userId: null,
-      isAuthenticated: false,
-      errorResponse: new Response(JSON.stringify({
-        success: false,
-        error: 'Authentication required',
-        code: 401,
-        timestamp: new Date().toISOString()
-      }), {
-        status: 401,
-        headers: {
-          'Content-Type': 'application/json',
-          'WWW-Authenticate': 'Bearer'
-        }
-      })
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return { 
+      authorized: false, 
+      error: 'Authorization header missing or invalid'
     };
   }
   
-  if (!authHeader) {
-    // If no authentication but it's not required
-    return {
-      userId: null,
-      isAuthenticated: false,
-      errorResponse: null
-    };
-  }
+  const token = authHeader.replace('Bearer ', '');
+  const authResult = verifyAuthToken(token, env.JWT_SECRET);
   
-  // Parse Bearer token
-  const tokenMatch = authHeader.match(/Bearer\s+(.+)/i);
-  if (!tokenMatch) {
-    return {
-      userId: null,
-      isAuthenticated: false,
-      errorResponse: new Response(JSON.stringify({
-        success: false,
-        error: 'Invalid authentication format',
-        code: 401,
-        timestamp: new Date().toISOString()
-      }), {
-        status: 401,
-        headers: {
-          'Content-Type': 'application/json',
-          'WWW-Authenticate': 'Bearer error="invalid_request"'
-        }
-      })
-    };
-  }
-  
-  const token = tokenMatch[1];
-  
-  // In a real implementation, we would get the key from environment
-  // For demo, we use a placeholder
-  const secretKey = env.JWT_SECRET || 'demo-secret-key';
-  
-  // Verify token
-  const verificationResult = verifyAuthToken(token, secretKey);
-  
-  if (!verificationResult.valid) {
-    return {
-      userId: null,
-      isAuthenticated: false,
-      errorResponse: new Response(JSON.stringify({
-        success: false,
-        error: `Authentication failed: ${verificationResult.error}`,
-        code: 401,
-        timestamp: new Date().toISOString()
-      }), {
-        status: 401,
-        headers: {
-          'Content-Type': 'application/json',
-          'WWW-Authenticate': `Bearer error="invalid_token", error_description="${verificationResult.error}"`
-        }
-      })
-    };
-  }
-  
-  // Successfully authenticated
   return {
-    userId: verificationResult.userId || null,
-    isAuthenticated: true,
-    errorResponse: null
+    authorized: authResult.valid,
+    userId: authResult.userId,
+    error: authResult.error
   };
 }
 
-/**
- * Error handling middleware
- */
-export function errorHandlingMiddleware(error: Error, requestId: string): Response {
-  console.error(`[${requestId}] Error:`, error);
+// Request ID middleware
+export function ensureRequestId(request: Request): string {
+  return request.headers.get('X-Request-ID') || nanoid();
+}
+
+// Error handler middleware
+export function handleError(error: Error, requestId: string): Response {
+  console.error(`[${requestId}] Unhandled error:`, error);
   
-  // Determine if this is a known error type that we want to expose
-  const isKnownError = error.name === 'ValidationError' || 
-                       error.name === 'DatabaseError' ||
-                       error.message.includes('not found') ||
-                       error.message.includes('validation');
-  
-  const errorMessage = isKnownError 
-    ? error.message 
-    : 'An unexpected error occurred';
-  
-  return new Response(JSON.stringify({
+  const errorResponse: ErrorResponse = {
     success: false,
-    error: errorMessage,
-    code: isKnownError ? 400 : 500,
+    error: `An unexpected error occurred: ${error.message}`,
+    code: 500,
     requestId,
     timestamp: new Date().toISOString()
-  }), {
-    status: isKnownError ? 400 : 500,
+  };
+  
+  return new Response(JSON.stringify(errorResponse), {
+    status: 500,
     headers: {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      ...corsHeaders()
+    }
+  });
+}
+
+// JSON response helper
+export function jsonResponse(
+  data: any, 
+  status: number = 200, 
+  additionalHeaders: Record<string, string> = {}
+): Response {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      ...corsHeaders(),
+      ...additionalHeaders
     }
   });
 }

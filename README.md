@@ -10,7 +10,7 @@ An advanced Cloudflare Worker API for verifying educational certificates using M
 - **Persistent Storage**: Utilizes Cloudflare D1 (SQLite) for credential and verification data
 - **Comprehensive Logging**: Detailed verification process logging with KV storage
 - **Performance Optimization**: Smart caching with KV for repeated verification requests
-- **Robust Security**: Secure API design with proper error handling and validation
+- **Robust Security**: Secure API design with proper error handling, rate limiting, and JWT authentication
 - **Scalable Architecture**: Built to handle high volumes of verification requests
 
 ## 📋 API Endpoints
@@ -26,6 +26,9 @@ Initiates the verification process for a certificate.
 **Parameters:**
 - `userId` - ID of the user who owns the certificate
 - `certificateId` - ID of the certificate to verify
+
+**Headers:**
+- `Authorization: Bearer <jwt_token>` - JWT token for authentication
 
 **Response Example:**
 ```json
@@ -77,6 +80,84 @@ GET /health
 
 Checks the health status of the worker with environment configuration details.
 
+## 🚀 Deployment Guide
+
+### Prerequisites
+
+- Cloudflare account with Workers and D1 enabled
+- Mistral AI API key for OCR capabilities
+- Node.js 18+ and npm
+
+### Environment Setup
+
+1. **Create Cloudflare Resources**
+
+   Create the required Cloudflare resources:
+
+   ```bash
+   # Create D1 database
+   wrangler d1 create certificate_verification
+
+   # Create KV namespaces for logs and cache
+   wrangler kv:namespace create VERIFICATION_LOGS
+   wrangler kv:namespace create CACHE
+   ```
+
+2. **Update wrangler.toml**
+
+   Update your `wrangler.toml` with the IDs of the created resources:
+
+   ```toml
+   # KV for storing logs
+   [[kv_namespaces]]
+   binding = "VERIFICATION_LOGS"
+   id = "your-kv-namespace-id-for-logs"
+   preview_id = "your-preview-kv-namespace-id-for-logs"
+
+   # KV for caching
+   [[kv_namespaces]]
+   binding = "CACHE"
+   id = "your-kv-namespace-id-for-cache"
+   preview_id = "your-preview-kv-namespace-id-for-cache"
+
+   # D1 Database
+   [[d1_databases]]
+   binding = "DB"
+   database_name = "certificate_verification"
+   database_id = "your-d1-database-id"
+   ```
+
+3. **Set Required Secrets**
+
+   ```bash
+   # Set Mistral API key
+   wrangler secret put MISTRAL_API_KEY
+   
+   # Set JWT Secret (for authentication)
+   wrangler secret put JWT_SECRET
+   ```
+
+### Manual Deployment
+
+```bash
+# Run database migrations
+wrangler d1 migrations apply certificate_verification
+
+# Deploy the worker
+wrangler deploy
+```
+
+### Automated Deployment with CI/CD
+
+This project includes a GitHub Actions workflow for automated deployments. To use it:
+
+1. Add the following secrets to your GitHub repository:
+   - `CLOUDFLARE_API_TOKEN`
+   - `MISTRAL_API_KEY`
+   - `JWT_SECRET`
+
+2. Push changes to the `main` branch or use the manual workflow dispatch to trigger deployment.
+
 ## 🧠 Verification Process
 
 1. **Request Validation**: Checks if the user and certificate exist in the database
@@ -87,132 +168,42 @@ Checks the health status of the worker with environment configuration details.
 6. **Status Update**: Updates the certificate status in the database
 7. **Comprehensive Logging**: Logs each step for auditing and debugging
 
-## 🔧 Technical Architecture
+## 🔒 Security Considerations
 
-### Core Components
+- **JWT Authentication**: All API endpoints are secured with JWT tokens
+- **Rate Limiting**: Prevents abuse through built-in rate limiting
+- **Error Handling**: Comprehensive error handling without revealing sensitive information
+- **Input Validation**: Thorough validation of all API inputs
+- **CORS**: Properly configured CORS headers for web clients
 
-- **Cloudflare Worker**: Edge computing platform for the API
-- **Cloudflare D1**: SQLite database for storing certificate and user data
-- **Cloudflare KV**: Key-value store for logging and caching
-- **Mistral AI API**: OCR and document analysis capabilities
-
-### Database Schema
-
-The worker uses Cloudflare D1 SQLite database with the following schema:
-
-#### Users Table
-```sql
-CREATE TABLE users (
-    id TEXT PRIMARY KEY,
-    email TEXT UNIQUE,
-    full_name TEXT NOT NULL,
-    wallet_address TEXT UNIQUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-#### Certificates Table
-```sql
-CREATE TABLE certificates (
-    id TEXT PRIMARY KEY,
-    user_id TEXT REFERENCES users(id),
-    title TEXT NOT NULL,
-    institution_name TEXT NOT NULL,
-    program_name TEXT NOT NULL,
-    issue_date TEXT NOT NULL,
-    verification_url TEXT NOT NULL,
-    certificate_url TEXT NOT NULL,
-    verification_url_pdf TEXT,
-    arweave_url TEXT,
-    nft_mint_address TEXT,
-    verification_status TEXT NOT NULL DEFAULT 'pending' 
-        CHECK (verification_status IN ('pending', 'verified', 'rejected')),
-    verification_details TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-#### Verification Logs Table
-```sql
-CREATE TABLE verification_logs (
-    id TEXT PRIMARY KEY,
-    certificate_id TEXT REFERENCES certificates(id),
-    verification_step TEXT NOT NULL,
-    status TEXT NOT NULL,
-    details TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-## 🚀 Getting Started
-
-### Prerequisites
-
-- Cloudflare account with Workers and D1 enabled
-- Mistral AI API key for OCR capabilities
-- Node.js and npm
-
-### Installation
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/certificate-verification-worker.git
-   cd certificate-verification-worker
-   ```
-
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-
-3. Configure environment variables:
-   - Create a `.dev.vars` file for local development:
-     ```
-     MISTRAL_API_KEY=your_mistral_api_key
-     ```
-
-4. Configure Cloudflare resources:
-   - Create a D1 database:
-     ```bash
-     wrangler d1 create certificate_verification
-     ```
-   - Create KV namespaces:
-     ```bash
-     wrangler kv:namespace create VERIFICATION_LOGS
-     wrangler kv:namespace create CACHE
-     ```
-
-5. Update `wrangler.toml` with your resource IDs
-
-### Development
-
-Run the worker locally:
-```bash
-npm run dev
-```
-
-### Deployment
-
-Deploy to Cloudflare Workers:
-```bash
-npm run deploy
-```
-
-## 📊 Performance Considerations
+## 📊 Performance Optimization
 
 - **Caching Strategy**: Results are cached for 24 hours to minimize API calls
 - **Edge Deployment**: Leverages Cloudflare's global network for low latency
 - **Efficient Database Queries**: Optimized SQL queries with proper indexing
 - **Asynchronous Processing**: Non-blocking I/O for handling multiple requests
 
-## 🔒 Security
+## 📈 Monitoring and Logging
 
-- **Input Validation**: Thorough validation of all API inputs
-- **Error Handling**: Comprehensive error handling without revealing sensitive information
-- **Rate Limiting**: Built-in protection against abuse through Cloudflare
-- **Access Control**: Proper authorization checks for all endpoints
+- **Health Endpoint**: `/health` endpoint for monitoring service health
+- **Detailed Logs**: Comprehensive logging for debugging and auditing
+- **Request Tracing**: Request IDs for correlating logs across systems
+
+## 🛠️ Local Development
+
+```bash
+# Install dependencies
+npm install
+
+# Run tests
+npm test
+
+# Start local development server
+wrangler dev
+
+# Apply database migrations (local)
+wrangler d1 migrations apply certificate_verification --local
+```
 
 ## 📝 License
 
